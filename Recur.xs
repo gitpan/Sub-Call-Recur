@@ -9,16 +9,12 @@
 #include "hook_op_check_entersubforcv.h"
 
 
-#define MY_CXT_KEY "Sub::Call::Recur::_guts" XS_VERSION
 
-typedef struct {
-    OP fakeop;
-} my_cxt_t;
+#ifndef AvREIFY_only
+#define AvREIFY_only(av)	(AvREIFY_off(av), AvREAL_on(av))
+#endif
 
-START_MY_CXT
-
-
-static OP *recur () {
+static OP *recur (pTHX) {
     dVAR; dSP; dMARK; dITEMS;
 
     IV cxix = cxstack_ix;
@@ -38,45 +34,79 @@ static OP *recur () {
     } else {
         CV *cv = cx->blk_sub.cv;
         I32 gimme = cx->blk_gimme;
-        OP *nextop;
+        AV *av = cx->blk_sub.argarray;
 
-        SvREFCNT_inc_simple_void_NN(cv);
-        sv_2mortal(cv);
+        POPs; PUTBACK; /* discard the GV that was added for entersub */
 
-        /* discard the CV of recur itself, that would have been given to entersub */
-        POPs;
-        PUTBACK;
+        /* undwind to top level */
+        if ( cxix < cxstack_ix )
+            dounwind(cxix);
 
-        /* execute return in list context, unwinding the stack and leaving the
-         * return values on the argument stack */
-        cx->blk_gimme = G_ARRAY;
-        MY_CXT.fakeop.op_next = PL_ppaddr[OP_RETURN](aTHX);
-        SPAGAIN;
+        /* abandon @_ if it got reified */
+        if (AvREAL(av)) {
+            SvREFCNT_dec(av);
+            av = newAV();
+            AvREIFY_only(av);
 
-        /* add the CV of the sub we just returned from */
-        XPUSHs((SV *)cv);
-        PUTBACK;
+            cx->blk_sub.argarray = av;
+            PAD_SVl(0) = (SV *)av;
+        }
 
-        /* mark the first return value */
-        PUSHMARK(SP - items);
+        ++MARK;
 
-        /* make a call to that subroutine, with the return values serving as args,
-         * and PL_op->op_next pointing to the original retop */
+        av_extend(av, items-1);
 
-        PL_op = &MY_CXT.fakeop;
-        nextop = PL_ppaddr[OP_ENTERSUB](aTHX);
+        Copy(MARK,AvARRAY(av),items,SV*);
+        AvFILLp(av) = items - 1;
 
-        /* restore context */
-        cxstack[cxstack_ix].blk_gimme = gimme;
+        while (MARK <= SP) {
+            if (*MARK) {
+                if ( SvTEMP(*MARK) || SvPADMY(*MARK) ) {
+                    I32 key;
 
-        MY_CXT.fakeop.op_next = NULL;
+                    key = AvMAX(av) + 1;
+                    while (key > AvFILLp(av) + 1)
+                        AvARRAY(av)[--key] = &PL_sv_undef;
+                    while (key) {
+                        SV * const sv = AvARRAY(av)[--key];
+                        assert(sv);
+                        if (sv != &PL_sv_undef)
+                            SvREFCNT_inc_simple_void_NN(sv);
+                    }
+                    key = AvARRAY(av) - AvALLOC(av);
+                    while (key)
+                        AvALLOC(av)[--key] = &PL_sv_undef;
+                    AvREIFY_off(av);
+                    AvREAL_on(av);
 
-        return nextop;
+                    break;
+                }
+            }
+            MARK++;
+        }
+
+        LEAVE;
+        ENTER;
+
+        RETURNOP(CvSTART(cv));
     }
 }
 
 STATIC OP *install_recur_op (pTHX_ OP *o, CV *cv, void *user_data) {
+
+    OP *prev = ((cUNOPo->op_first->op_sibling) ? cUNOPo : ((UNOP*)cUNOPo->op_first))->op_first;
+    OP *o2 = prev->op_sibling;
+    OP *cvop;
+
+    for (cvop = o2; cvop->op_sibling; cvop = cvop->op_sibling);
+
+    /* disable the cv push op, so that we don't need to pop the GV for recur
+     * itself */
+    cvop->op_ppaddr = PL_ppaddr[OP_NULL];
+    ((UNOP *)cvop)->op_first->op_ppaddr = PL_ppaddr[OP_NULL];
+
     o->op_ppaddr = recur;
+
     return o;
 }
 
@@ -86,11 +116,4 @@ PROTOTYPES: disable
 BOOT:
 {
     hook_op_check_entersubforcv(get_cv("Sub::Call::Recur::recur", TRUE), install_recur_op, NULL);
-
-    MY_CXT_INIT;
-
-    Zero(&MY_CXT.fakeop, 1, OP);
-
-    MY_CXT.fakeop.op_type  = OP_ENTERSUB;
-    MY_CXT.fakeop.op_flags = OPf_STACKED | OPf_WANT_VOID;
 }

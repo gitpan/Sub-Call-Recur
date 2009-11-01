@@ -7,7 +7,7 @@ require 5.008001;
 use parent qw(Exporter DynaLoader);
 use B::Hooks::OP::Check::EntersubForCV;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 $VERSION = eval $VERSION;
 
 our @EXPORT = our @EXPORT_OK = qw(recur);
@@ -51,7 +51,10 @@ C<recur> is a tail call to the current function. It is a bit like assigning the
 arguments to C<@_> and invoking a C<goto> to the first expression of the
 subroutine.
 
-THis allows functional style looping with constant stack space.
+It can be thought of as the C<redo> operator, but for subroutines instead of
+loops.
+
+This form allows functional style looping with constant stack space.
 
 =head1 SEE ALSO
 
