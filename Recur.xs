@@ -36,7 +36,7 @@ static OP *recur (pTHX) {
         I32 gimme = cx->blk_gimme;
         AV *av = cx->blk_sub.argarray;
 
-        POPs; PUTBACK; /* discard the GV that was added for entersub */
+        // POPs; PUTBACK; /* discard the GV that was added for entersub */
 
         /* undwind to top level */
         if ( cxix < cxstack_ix )
@@ -60,8 +60,8 @@ static OP *recur (pTHX) {
         AvFILLp(av) = items - 1;
 
         while (MARK <= SP) {
-            if (*MARK) {
-                if ( SvTEMP(*MARK) || SvPADMY(*MARK) ) {
+            if (*SP) {
+                if ( SvTEMP(*SP) || SvPADMY(*SP) ) {
                     I32 key;
 
                     key = AvMAX(av) + 1;
@@ -82,11 +82,18 @@ static OP *recur (pTHX) {
                     break;
                 }
             }
-            MARK++;
+            SP--;
         }
 
+        PUTBACK;
+
         LEAVE;
+        FREETMPS;
         ENTER;
+
+        SAVECOMPPAD();
+        PAD_SET_CUR_NOSAVE(CvPADLIST(cv), CvDEPTH(cv));
+
 
         RETURNOP(CvSTART(cv));
     }
